@@ -13,7 +13,7 @@ from opencood.models.sub_modules.roi_head import RoIHead
 from opencood.models.sub_modules.matcher import Matcher
 from opencood.data_utils.post_processor.fpvrcnn_postprocessor import \
     FpvrcnnPostprocessor
-from opencood.models.sub_modules.torch_transformation_utils import warp_affine_simple
+
 
 class FPVRCNN(nn.Module):
     def __init__(self, args):
@@ -39,7 +39,6 @@ class FPVRCNN(nn.Module):
         self.matcher = Matcher(args['matcher'], args['lidar_range'])
         self.roi_head = RoIHead(args['roi_head'])
         self.train_stage2 = args['activate_stage2']
-        self.discrete_ratio = args['voxel_size'][0]
 
     def forward(self, batch_dict):
         voxel_features = batch_dict['processed_lidar']['voxel_features']
@@ -51,16 +50,14 @@ class FPVRCNN(nn.Module):
         batch_dict.update({'voxel_features': voxel_features,
                            'voxel_coords': voxel_coords,
                            'voxel_num_points': voxel_num_points,
-                           'batch_size': int(batch_dict['record_len'].sum()),
-                           'proj_first': batch_dict['proj_first'],
-                           'lidar_pose': batch_dict['lidar_pose']})
+                           'batch_size': int(batch_dict['record_len'].sum())})
 
         batch_dict = self.vfe(batch_dict)
         batch_dict = self.spconv_block(batch_dict)
         batch_dict = self.map_to_bev(batch_dict)
 
         out = self.ssfa(batch_dict['spatial_features'])
-        batch_dict['stage1_out'] = self.head(out) 
+        batch_dict['preds_dict_stage1'] = self.head(out)
 
         data_dict, output_dict = {}, {}
         data_dict['ego'], output_dict['ego'] = batch_dict, batch_dict
@@ -68,9 +65,6 @@ class FPVRCNN(nn.Module):
         pred_box3d_list, scores_list = \
             self.post_processor.post_process(data_dict, output_dict,
                                              stage1=True)
-
-        # if proj_first is False
-        # the boxes are predicted in each coordinate              
         batch_dict['det_boxes'] = pred_box3d_list
         batch_dict['det_scores'] = scores_list
 
@@ -80,9 +74,6 @@ class FPVRCNN(nn.Module):
             batch_dict = self.roi_head(batch_dict)
 
         return batch_dict
-
-
-
 
 
 if __name__ == "__main__":

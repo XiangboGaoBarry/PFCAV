@@ -1,18 +1,19 @@
 """
-This class is about swap fusion applications
+This class is about swap fusion applications (also known as Fused Axial Attention)
 """
 import torch
 from einops import rearrange
 from torch import nn, einsum
 from einops.layers.torch import Rearrange, Reduce
 
-from opencood.models.sub_modules.base_transformer import FeedForward, PreNormResidual
+from opencood.models.sub_modules.base_transformer import \
+    FeedForward, PreNormResidual
 
 
 # swap attention -> max_vit
 class Attention(nn.Module):
     """
-    Unit Attention class.
+    Unit Attention class. Todo: mask is not added yet.
 
     Parameters
     ----------
@@ -225,6 +226,7 @@ class SwapFusionBlock(nn.Module):
         )
 
     def forward(self, x, mask=None):
+        # todo: add mask operation later for mulit-agents
         x = self.block(x)
         return x
 

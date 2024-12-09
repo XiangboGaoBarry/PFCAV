@@ -51,3 +51,4 @@ def setup_for_distributed(is_master):
             builtin_print(*args, **kwargs)
 
     __builtin__.print = print
+

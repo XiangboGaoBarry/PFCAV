@@ -35,12 +35,7 @@ class PixorLoss(nn.Module):
 
         """
         targets = target_dict["label_map"]
-        
-        # TODO: Here we hard-coded for to different annotation format
-        try:
-            cls_preds, loc_preds = output_dict["cls"], output_dict["reg"]
-        except:
-            cls_preds, loc_preds = output_dict["cls_preds"], output_dict["reg_preds"]
+        cls_preds, loc_preds = output_dict["cls"], output_dict["reg"]
 
         cls_targets, loc_targets = targets.split([1, 6], dim=1)
         pos_count = cls_targets.sum()
@@ -71,7 +66,7 @@ class PixorLoss(nn.Module):
 
         return total_loss
 
-    def logging(self, epoch, batch_id, batch_len, writer = None):
+    def logging(self, epoch, batch_id, batch_len, writer, pbar=None):
         """
         Print out  the loss function for current iteration.
 
@@ -90,16 +85,21 @@ class PixorLoss(nn.Module):
         reg_loss = self.loss_dict['reg_loss']
         cls_loss = self.loss_dict['cls_loss']
 
-        print("[epoch %d][%d/%d], || Loss: %.4f || cls Loss: %.4f"
-              " || reg Loss: %.4f" % (
-                  epoch, batch_id + 1, batch_len,
-                  total_loss.item(), cls_loss.item(), reg_loss.item()))
-                  
-        if not writer is None:
-            writer.add_scalar('Regression_loss', reg_loss.item(),
-                            epoch * batch_len + batch_id)
-            writer.add_scalar('Confidence_loss', cls_loss.item(),
-                            epoch * batch_len + batch_id)
+        if pbar is None:
+            print("[epoch %d][%d/%d], || Loss: %.4f || Conf Loss: %.4f"
+                " || Loc Loss: %.4f" % (
+                    epoch, batch_id + 1, batch_len,
+                    total_loss.item(), cls_loss.item(), reg_loss.item()))
+        else:
+            pbar.set_description("[epoch %d][%d/%d], || Loss: %.4f || Conf Loss: %.4f"
+                  " || Loc Loss: %.4f" % (
+                      epoch, batch_id + 1, batch_len,
+                      total_loss.item(), cls_loss.item(), reg_loss.item()))
+
+        writer.add_scalar('Regression_loss', reg_loss.item(),
+                          epoch * batch_len + batch_id)
+        writer.add_scalar('Confidence_loss', cls_loss.item(),
+                          epoch * batch_len + batch_id)
 
 
 def test():

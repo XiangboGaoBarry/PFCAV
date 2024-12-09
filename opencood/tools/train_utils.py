@@ -1,55 +1,19 @@
 # -*- coding: utf-8 -*-
-# Author: Yifan Lu <yifan_lu@sjtu.edu.cn>
+# Author: Runsheng Xu <rxx3386@ucla.edu>, Hao Xiang <haxiang@g.ucla.edu>,
 # License: TDG-Attribution-NonCommercial-NoDistrib
+
 
 import glob
 import importlib
 import yaml
+import sys
 import os
 import re
 from datetime import datetime
-import shutil
+
 import torch
 import torch.optim as optim
-
-def backup_script(full_path, folders_to_save=["models", "data_utils", "utils", "loss"]):
-    target_folder = os.path.join(full_path, 'scripts')
-    if not os.path.exists(target_folder):
-        if not os.path.exists(target_folder):
-            os.mkdir(target_folder)
-    
-    current_path = os.path.dirname(__file__)  # __file__ refer to this file, then the dirname is "?/tools"
-
-    for folder_name in folders_to_save:
-        ttarget_folder = os.path.join(target_folder, folder_name)
-        source_folder = os.path.join(current_path, f'../{folder_name}')
-        shutil.copytree(source_folder, ttarget_folder)
-
-def check_missing_key(model_state_dict, ckpt_state_dict):
-    checkpoint_keys = set(ckpt_state_dict.keys())
-    model_keys = set(model_state_dict.keys())
-
-    missing_keys = model_keys - checkpoint_keys
-    extra_keys = checkpoint_keys - model_keys
-
-    missing_key_modules = set([keyname.split('.')[0] for keyname in missing_keys])
-    extra_key_modules = set([keyname.split('.')[0] for keyname in extra_keys])
-
-    print("------ Loading Checkpoint ------")
-    if len(missing_key_modules) == 0 and len(extra_key_modules) ==0:
-        return
-
-    print("Missing keys from ckpt:")
-    print(*missing_key_modules,sep='\n',end='\n\n')
-    # print(*missing_keys,sep='\n',end='\n\n')
-
-    print("Extra keys from ckpt:")
-    print(*extra_key_modules,sep='\n',end='\n\n')
-    print(*extra_keys,sep='\n',end='\n\n')
-
-    print("You can go to tools/train_utils.py to print the full missing key name!")
-    print("--------------------------------")
-
+import timm
 
 def load_saved_model(saved_path, model):
     """
@@ -70,6 +34,8 @@ def load_saved_model(saved_path, model):
     assert os.path.exists(saved_path), '{} not found'.format(saved_path)
 
     def findLastCheckpoint(save_dir):
+        if os.path.exists(os.path.join(saved_path, 'latest.pth')):
+            return 10000
         file_list = glob.glob(os.path.join(save_dir, '*epoch*.pth'))
         if file_list:
             epochs_exist = []
@@ -80,65 +46,22 @@ def load_saved_model(saved_path, model):
         else:
             initial_epoch_ = 0
         return initial_epoch_
-    
-    file_list = glob.glob(os.path.join(saved_path, 'net_epoch_bestval_at*.pth'))
-    if file_list:
-        assert len(file_list) == 1
-        print("resuming best validation model at epoch %d" % \
-                eval(file_list[0].split("/")[-1].rstrip(".pth").lstrip("net_epoch_bestval_at")))
-        loaded_state_dict = torch.load(file_list[0] , map_location='cpu')
-        # check_missing_key(model.state_dict(), loaded_state_dict)
-        model.load_state_dict(loaded_state_dict, strict=False)
-        return eval(file_list[0].split("/")[-1].rstrip(".pth").lstrip("net_epoch_bestval_at")), model
 
     initial_epoch = findLastCheckpoint(saved_path)
     if initial_epoch > 0:
+        model_file = os.path.join(saved_path,
+                         'net_epoch%d.pth' % initial_epoch) \
+            if initial_epoch != 10000 else os.path.join(saved_path,
+                         'latest.pth')
         print('resuming by loading epoch %d' % initial_epoch)
-        loaded_state_dict = torch.load(os.path.join(saved_path,
-                         'net_epoch%d.pth' % initial_epoch), map_location='cpu')
-        # check_missing_key(model.state_dict(), loaded_state_dict)
-        model.load_state_dict(loaded_state_dict, strict=False)
+        checkpoint = torch.load(
+            model_file,
+            map_location='cpu')
+        model.load_state_dict(checkpoint, strict=False)
+
+        del checkpoint
 
     return initial_epoch, model
-
-
-def load_original_model(saved_path, model, protocol=True):
-    """
-    Load protocol and ego model
-
-    Parameters
-    __________
-    saved_path : str
-       model saved path
-    model : opencood object
-        The model instance.
-
-    Returns
-    -------
-    model : opencood object
-        The model instance loaded pretrained params.
-    """
-    
-    
-    assert os.path.exists(saved_path), '{} not found'.format(saved_path)
-    ego_path = os.path.join(saved_path, 'ego.pth')
-    
-    if protocol:
-        protocol_path = os.path.join(saved_path, 'protocol.pth')
-        assert os.path.exists(protocol_path), '{} not found'.format(protocol_path)
-        print("load protocal checkpoint from %s" % protocol_path)
-        loaded_protocol_state_dict = torch.load(protocol_path, map_location='cpu')
-        check_missing_key(model.state_dict(), loaded_protocol_state_dict)
-        model.load_state_dict(loaded_protocol_state_dict, strict=False)
-        print()
-    
-    assert os.path.exists(ego_path), '{} not found'.format(ego_path)
-    print("load ego checkpoint from %s" % ego_path)
-    loaded_ego_state_dict = torch.load(ego_path, map_location='cpu')
-    check_missing_key(model.state_dict(), loaded_ego_state_dict)
-    model.load_state_dict(loaded_ego_state_dict, strict=False)
-    
-    return model
 
 
 def setup_train(hypes):
@@ -165,16 +88,15 @@ def setup_train(hypes):
         if not os.path.exists(full_path):
             try:
                 os.makedirs(full_path)
-                backup_script(full_path)
             except FileExistsError:
                 pass
+        # save the yaml file
         save_name = os.path.join(full_path, 'config.yaml')
         with open(save_name, 'w') as outfile:
             yaml.dump(hypes, outfile)
 
-        
-
     return full_path
+
 
 
 def create_model(hypes):
@@ -249,80 +171,6 @@ def create_loss(hypes):
     return criterion
 
 
-def create_losses_heter(hypes):
-    """
-    Create the loss function based on the given loss name.
-
-    Parameters
-    ----------
-    hypes : dict
-        Configuration params for training.
-    Returns
-    -------
-    criterion : opencood.object
-        The loss function.
-    """
-    criterion_dict = dict()
-    for modality_name in hypes['loss'].keys():
-        
-        loss_func_name = hypes['loss'][modality_name]['core_method']
-        loss_func_config = hypes['loss'][modality_name]['args']
-
-        loss_filename = "opencood.loss." + loss_func_name
-        loss_lib = importlib.import_module(loss_filename)
-        loss_func = None
-        target_loss_name = loss_func_name.replace('_', '')
-
-        for name, lfunc in loss_lib.__dict__.items():
-            if name.lower() == target_loss_name.lower():
-                loss_func = lfunc
-
-        if loss_func is None:
-            print('loss function not found in loss folder. Please make sure you '
-                'have a python file named %s and has a class '
-                'called %s ignoring upper/lower case' % (loss_filename,
-                                                        target_loss_name))
-            exit(0)
-
-        criterion_dict[modality_name] = loss_func(loss_func_config)
-    return criterion_dict
-
-def create_adapter_loss(hypes):
-    """
-    Create the loss function based on the given loss name.
-
-    Parameters
-    ----------
-    hypes : dict
-        Configuration params for training.
-    Returns
-    -------
-    criterion : opencood.object
-        The loss function.
-    """
-    loss_func_name = hypes['loss_adapter']['core_method']
-    loss_func_config = hypes['loss_adapter']['args']
-
-    loss_filename = "opencood.loss." + loss_func_name
-    loss_lib = importlib.import_module(loss_filename)
-    loss_func = None
-    target_loss_name = loss_func_name.replace('_', '')
-
-    for name, lfunc in loss_lib.__dict__.items():
-        if name.lower() == target_loss_name.lower():
-            loss_func = lfunc
-
-    if loss_func is None:
-        print('loss function not found in loss folder. Please make sure you '
-              'have a python file named %s and has a class '
-              'called %s ignoring upper/lower case' % (loss_filename,
-                                                       target_loss_name))
-        exit(0)
-
-    criterion = loss_func(loss_func_config)
-    return criterion
-
-
 def setup_optimizer(hypes, model):
     """
     Create optimizer corresponding to the yaml file
@@ -336,18 +184,22 @@ def setup_optimizer(hypes, model):
     """
     method_dict = hypes['optimizer']
     optimizer_method = getattr(optim, method_dict['core_method'], None)
+    print('optimizer method is: %s' % optimizer_method)
+
     if not optimizer_method:
         raise ValueError('{} is not supported'.format(method_dict['name']))
     if 'args' in method_dict:
-        return optimizer_method(model.parameters(),
+        return optimizer_method(filter(lambda p: p.requires_grad,
+                                       model.parameters()),
                                 lr=method_dict['lr'],
                                 **method_dict['args'])
     else:
-        return optimizer_method(model.parameters(),
+        return optimizer_method(filter(lambda p: p.requires_grad,
+                                       model.parameters()),
                                 lr=method_dict['lr'])
 
 
-def setup_lr_schedular(hypes, optimizer, init_epoch=None, n_iter_per_epoch=1):
+def setup_lr_schedular(hypes, optimizer, n_iter_per_epoch):
     """
     Set up the learning rate schedular.
 
@@ -359,8 +211,6 @@ def setup_lr_schedular(hypes, optimizer, init_epoch=None, n_iter_per_epoch=1):
     optimizer : torch.optimizer
     """
     lr_schedule_config = hypes['lr_scheduler']
-    last_epoch = init_epoch if init_epoch is not None else 0
-    
 
     if lr_schedule_config['core_method'] == 'step':
         from torch.optim.lr_scheduler import StepLR
@@ -375,6 +225,7 @@ def setup_lr_schedular(hypes, optimizer, init_epoch=None, n_iter_per_epoch=1):
         scheduler = MultiStepLR(optimizer,
                                 milestones=milestones,
                                 gamma=gamma)
+
     elif lr_schedule_config['core_method'] == 'exponential':
         print('ExponentialLR is chosen for lr scheduler')
         from torch.optim.lr_scheduler import ExponentialLR
@@ -399,9 +250,8 @@ def setup_lr_schedular(hypes, optimizer, init_epoch=None, n_iter_per_epoch=1):
             cycle_limit=1,
             t_in_epochs=False,
         )
-
     else:
-        sys.exit('Unidentified scheduler')
+        sys.exit('not supported lr schedular')
 
     return scheduler
 
@@ -413,6 +263,6 @@ def to_device(inputs, device):
         return {k: to_device(v, device) for k, v in inputs.items()}
     else:
         if isinstance(inputs, int) or isinstance(inputs, float) \
-                or isinstance(inputs, str) or not hasattr(inputs, 'to'):
+                or isinstance(inputs, str):
             return inputs
-        return inputs.to(device, non_blocking=True)
+        return inputs.to(device)

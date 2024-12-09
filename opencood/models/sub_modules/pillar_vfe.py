@@ -103,18 +103,10 @@ class PillarVFE(nn.Module):
         return paddings_indicator
 
     def forward(self, batch_dict):
-        """encoding voxel feature using point-pillar method
-        Args:
-            voxel_features: [M, 32, 4]
-            voxel_num_points: [M,]
-            voxel_coords: [M, 4]
-        Returns:
-            features: [M,64], after PFN
-        """
+
         voxel_features, voxel_num_points, coords = \
             batch_dict['voxel_features'], batch_dict['voxel_num_points'], \
             batch_dict['voxel_coords']
-
         points_mean = \
             voxel_features[:, :, :3].sum(dim=1, keepdim=True) / \
             voxel_num_points.type_as(voxel_features).view(-1, 1, 1)
@@ -151,5 +143,4 @@ class PillarVFE(nn.Module):
             features = pfn(features)
         features = features.squeeze()
         batch_dict['pillar_features'] = features
-
         return batch_dict

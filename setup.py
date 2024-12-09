@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-# Author: Yifan Lu <yifan_lu@sjtu.edu.cn>
+# Author: Runsheng Xu <rxx3386@ucla.edu>
 # License: TDG-Attribution-NonCommercial-NoDistrib
+
 
 from os.path import dirname, realpath
 from setuptools import setup, find_packages, Distribution
@@ -18,9 +19,10 @@ setup(
     name='OpenCOOD',
     version=__version__,
     packages=find_packages(),
+    url='https://github.com/ucla-mobility/OpenCDA.git',
     license='MIT',
-    author='Yifan Lu',
-    author_email='yifan_lu@sjtu.edu.cn',
+    author='Runsheng Xu, Hao Xiang',
+    author_email='rxx3386@ucla.edu',
     description='An opensource pytorch framework for autonomous driving '
                 'cooperative detection',
     long_description=open("README.md").read(),

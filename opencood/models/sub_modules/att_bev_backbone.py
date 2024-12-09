@@ -5,18 +5,12 @@ import torch.nn as nn
 from opencood.models.fuse_modules.self_attn import AttFusion
 from opencood.models.sub_modules.auto_encoder import AutoEncoder
 
-DEBUG = False
 
 class AttBEVBackbone(nn.Module):
     def __init__(self, model_cfg, input_channels):
         super().__init__()
         self.model_cfg = model_cfg
         self.compress = False
-
-        self.discrete_ratio = model_cfg['voxel_size'][0]
-        self.downsample_rate = 1
-
-            
 
         if 'compression' in model_cfg and model_cfg['compression'] > 0:
             self.compress = True
@@ -119,32 +113,17 @@ class AttBEVBackbone(nn.Module):
 
     def forward(self, data_dict):
         spatial_features = data_dict['spatial_features']
-        if DEBUG:
-            origin_features = torch.clone(spatial_features)
         record_len = data_dict['record_len']
-        pairwise_t_matrix = data_dict['pairwise_t_matrix']
 
         ups = []
         ret_dict = {}
         x = spatial_features
 
-        H, W = x.shape[2:]   #  200, 704
-        pairwise_t_matrix = pairwise_t_matrix[:,:,:,[0, 1],:][:,:,:,:,[0, 1, 3]] # [B, L, L, 2, 3]
-
-        pairwise_t_matrix[...,0,1] = pairwise_t_matrix[...,0,1] * H / W
-        pairwise_t_matrix[...,1,0] = pairwise_t_matrix[...,1,0] * W / H
-        pairwise_t_matrix[...,0,2] = pairwise_t_matrix[...,0,2] / (self.downsample_rate * self.discrete_ratio * W) * 2
-        pairwise_t_matrix[...,1,2] = pairwise_t_matrix[...,1,2] / (self.downsample_rate * self.discrete_ratio * H) * 2
-
-
         for i in range(len(self.blocks)):
             x = self.blocks[i](x)
             if self.compress and i < len(self.compression_modules):
                 x = self.compression_modules[i](x)
-            if DEBUG:
-                self.fuse_modules[i].forward_debug(x, origin_features, record_len, pairwise_t_matrix)
-            else:
-                x_fuse = self.fuse_modules[i](x, record_len, pairwise_t_matrix)
+            x_fuse = self.fuse_modules[i](x, record_len)
 
             stride = int(spatial_features.shape[2] / x.shape[2])
             ret_dict['spatial_features_%dx' % stride] = x

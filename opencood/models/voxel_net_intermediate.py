@@ -65,11 +65,6 @@ class VoxelNetIntermediate(nn.Module):
                               num_point_features=4,
                               voxel_size=args['voxel_size'],
                               point_cloud_range=args['lidar_range'])
-
-        self.proj_first = True
-        if ('proj_first' in args) and (args['proj_first'] is False):
-            self.proj_first = False
-
         self.cml = CML()
         self.fusion_net = AttFusion(128)
         self.rpn = RPN(args['anchor_num'])
@@ -147,13 +142,10 @@ class VoxelNetIntermediate(nn.Module):
         voxel_coords = data_dict['processed_lidar']['voxel_coords']
         voxel_num_points = data_dict['processed_lidar']['voxel_num_points']
         record_len = data_dict['record_len']
-        pairwise_t_matrix = data_dict['pairwise_t_matrix']
-
 
         batch_dict = {'voxel_features': voxel_features,
                       'voxel_coords': voxel_coords,
-                      'voxel_num_points': voxel_num_points,
-                      'pairwise_t_matrix': pairwise_t_matrix}
+                      'voxel_num_points': voxel_num_points}
 
         if voxel_coords.is_cuda:
             record_len_tmp = record_len.cpu()
@@ -177,20 +169,8 @@ class VoxelNetIntermediate(nn.Module):
         if self.compression:
             vmfs = self.compression_layer(vmfs)
 
-        # pairwise_t_matrix
-        # project_first must be right
-        # have not check project_first=False
-        pairwise_t_matrix = pairwise_t_matrix[:,:,:,[0, 1],:][:,:,:,:,[0, 1, 3]] # [B, L, L, 2, 3]
-
-        if not self.proj_first:
-            pairwise_t_matrix[...,0,1] = pairwise_t_matrix[...,0,1] * self.H / self.W
-            pairwise_t_matrix[...,1,0] = pairwise_t_matrix[...,1,0] * self.W / self.H
-            pairwise_t_matrix[...,0,2] = pairwise_t_matrix[...,0,2] / self.W * 2
-            pairwise_t_matrix[...,1,2] = pairwise_t_matrix[...,1,2] / self.H * 2
-
-
         # information naive fusion
-        vmfs_fusion = self.fusion_net(vmfs, record_len, pairwise_t_matrix)
+        vmfs_fusion = self.fusion_net(vmfs, record_len)
 
         # region proposal network
         # merge the depth and feature dim into one, output probability score

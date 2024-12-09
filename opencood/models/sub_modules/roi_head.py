@@ -1,5 +1,5 @@
 import copy
-from icecream import ic
+
 import torch.nn as nn
 import torch
 import numpy as np
@@ -135,19 +135,15 @@ class RoIHead(nn.Module):
             'reg_tgt': [],
             'iou_tgt': [],
             'rois_anchor': [],
-            'record_len': [],
-            'rois_scores_stage1': []
+            'record_len': []
         }
+        # pred_boxes = [boxes[:, [0, 1, 2, 5, 4, 3, 6]] for boxes in batch_dict['boxes_fused']]
         pred_boxes = batch_dict['boxes_fused']
-        pred_scores = batch_dict['scores_fused']
         gt_boxes = [b[m][:, [0, 1, 2, 5, 4, 3, 6]].float() for b, m in
                     zip(batch_dict['object_bbx_center'],
-                        batch_dict['object_bbx_mask'].bool())]  # hwl -> lwh order
-        for rois, scores, gts in zip(pred_boxes, pred_scores,  gt_boxes): # each frame
-            rois = rois[:, [0, 1, 2, 5, 4, 3, 6]]  # hwl -> lwh
-            if gts.shape[0] == 0:
-                gts = rois.clone()
-
+                        batch_dict['object_bbx_mask'].bool())]
+        for rois, gts in zip(pred_boxes, gt_boxes):
+            gts[:, -1] *= 1
             ious = boxes_iou3d_gpu(rois, gts)
             max_ious, gt_inds = ious.max(dim=1)
             gt_of_rois = gts[gt_inds]
@@ -200,7 +196,6 @@ class RoIHead(nn.Module):
             )
 
             batch_dict['rcnn_label_dict']['rois'].append(rois)
-            batch_dict['rcnn_label_dict']['rois_scores_stage1'].append(scores)
             batch_dict['rcnn_label_dict']['gt_of_rois'].append(gt_of_rois)
             batch_dict['rcnn_label_dict']['gt_of_rois_src'].append(
                 gt_of_rois_src)
@@ -209,7 +204,6 @@ class RoIHead(nn.Module):
             batch_dict['rcnn_label_dict']['iou_tgt'].append(max_ious)
             batch_dict['rcnn_label_dict']['rois_anchor'].append(rois_anchor)
             batch_dict['rcnn_label_dict']['record_len'].append(rois.shape[0])
-            
 
         # cat list to tensor
         for k, v in batch_dict['rcnn_label_dict'].items():
@@ -278,7 +272,7 @@ class RoIHead(nn.Module):
                                                               2).contiguous().squeeze(
             dim=1)  # (B, C)
 
-        batch_dict['stage2_out'] = {
+        batch_dict['fpvrcnn_out'] = {
             'rcnn_cls': rcnn_cls,
             'rcnn_iou': rcnn_iou,
             'rcnn_reg': rcnn_reg,

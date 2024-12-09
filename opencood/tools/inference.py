@@ -1,273 +1,208 @@
 # -*- coding: utf-8 -*-
-# Author: Yifan Lu <yifan_lu@sjtu.edu.cn>, Runsheng Xu <rxx3386@ucla.edu>, Hao Xiang <haxiang@g.ucla.edu>,
+# Author: Runsheng Xu <rxx3386@ucla.edu>, Hao Xiang <haxiang@g.ucla.edu>, Yifan Lu <yifan_lu@sjtu.edu.cn>
 # License: TDG-Attribution-NonCommercial-NoDistrib
+
 
 import argparse
 import os
 import time
-from typing import OrderedDict
-import importlib
+from tqdm import tqdm
+
 import torch
 import open3d as o3d
-from torch.utils.data import DataLoader, Subset
-import numpy as np
+from torch.utils.data import DataLoader
+
 import opencood.hypes_yaml.yaml_utils as yaml_utils
 from opencood.tools import train_utils, inference_utils
 from opencood.data_utils.datasets import build_dataset
 from opencood.utils import eval_utils
-from opencood.visualization import vis_utils, my_vis, simple_vis
-from opencood.utils.common_utils import update_dict
-torch.multiprocessing.set_sharing_strategy('file_system')
+from opencood.visualization import vis_utils
+import matplotlib.pyplot as plt
+
 
 def test_parser():
     parser = argparse.ArgumentParser(description="synthetic data generation")
     parser.add_argument('--model_dir', type=str, required=True,
                         help='Continued training path')
-    parser.add_argument('--fusion_method', type=str,
-                        default='intermediate',
-                        help='no, no_w_uncertainty, late, early or intermediate')
-    parser.add_argument('--save_vis_interval', type=int, default=40,
-                        help='interval of saving visualization')
+    parser.add_argument('--fusion_method', required=True, type=str,
+                        default='late',
+                        help='late, early or intermediate')
+    parser.add_argument('--show_vis', action='store_true',
+                        help='whether to show image visualization result')
+    parser.add_argument('--show_sequence', action='store_true',
+                        help='whether to show video visualization result.'
+                             'it can note be set true with show_vis together ')
+    parser.add_argument('--save_vis', action='store_true',
+                        help='whether to save visualization result')
     parser.add_argument('--save_npy', action='store_true',
                         help='whether to save prediction and gt result'
-                             'in npy file')
-    parser.add_argument('--range', type=str, default="102.4,102.4",
-                        help="detection range is [-102.4, +102.4, -102.4, +102.4]")
-    parser.add_argument('--no_score', action='store_true',
-                        help="whether print the score of prediction")
-    parser.add_argument('--note', default="", type=str, help="any other thing?")
-    parser.add_argument('--all', action='store_true', help="evaluate all the agents instead of the first one.")
-    parser.add_argument('--show_bev', action='store_true', help="Visualize the BEV feature")
+                             'in npy_test file')
+    parser.add_argument('--global_sort_detections', action='store_true',
+                        help='whether to globally sort detections by confidence score.'
+                             'If set to True, it is the mainstream AP computing method,'
+                             'but would increase the tolerance for FP (False Positives).')
     opt = parser.parse_args()
     return opt
 
 
 def main():
     opt = test_parser()
-
-    assert opt.fusion_method in ['late', 'early', 'intermediate', 'no', 'no_w_uncertainty', 'single'] 
+    assert opt.fusion_method in ['late', 'early', 'intermediate']
+    assert not (opt.show_vis and opt.show_sequence), 'you can only visualize ' \
+                                                    'the results in single ' \
+                                                    'image mode or video mode'
 
     hypes = yaml_utils.load_yaml(None, opt)
 
-    if 'heter' in hypes:
-        # hypes['heter']['lidar_channels'] = 16
-        # opt.note += "_16ch"
-
-        x_min, x_max = -eval(opt.range.split(',')[0]), eval(opt.range.split(',')[0])
-        y_min, y_max = -eval(opt.range.split(',')[1]), eval(opt.range.split(',')[1])
-        opt.note += f"_{x_max}_{y_max}"
-
-
-        if 'anchor_args' in hypes['postprocess']:
-            new_cav_range = [x_min, y_min, hypes['postprocess']['anchor_args']['cav_lidar_range'][2], \
-                                x_max, y_max, hypes['postprocess']['anchor_args']['cav_lidar_range'][5]]
-            # replace all appearance
-            hypes = update_dict(hypes, {
-                "cav_lidar_range": new_cav_range,
-                "lidar_range": new_cav_range,
-                "gt_range": new_cav_range
-            })
-        else:
-            # To handle heter task case, where different modality has different postprocessor
-            for modality_name, p in hypes['postprocess'].items():
-                assert modality_name[0] == 'm' and modality_name[1:].isdigit()
-                if 'anchor_args' in p:
-                    new_cav_range = [x_min, y_min, p['anchor_args']['cav_lidar_range'][2], \
-                                    x_max, y_max, p['anchor_args']['cav_lidar_range'][5]]
-                update_dict(p, {
-                    "cav_lidar_range": new_cav_range,
-                    "lidar_range": new_cav_range,
-                    "gt_range": new_cav_range
-                })
-
-
-        # reload anchor
-        yaml_utils_lib = importlib.import_module("opencood.hypes_yaml.yaml_utils")
-        for name, func in yaml_utils_lib.__dict__.items():
-            if name == hypes["yaml_parser"]:
-                parser_func = func
-        hypes = parser_func(hypes)
-
-        
-    
-    hypes['validate_dir'] = hypes['test_dir']
-    if "OPV2V" in hypes['test_dir'] or "v2xsim" in hypes['test_dir']:
-        assert "test" in hypes['validate_dir']
-    
-    # This is used in visualization
-    # left hand: OPV2V, V2XSet
-    # right hand: V2X-Sim 2.0 and DAIR-V2X
-    left_hand = True if ("OPV2V" in hypes['test_dir'] or "V2XSET" in hypes['test_dir']) else False
-
-    print(f"Left hand visualizing: {left_hand}")
-
-    if 'box_align' in hypes.keys():
-        hypes['box_align']['val_result'] = hypes['box_align']['test_result']
+    print('Dataset Building')
+    opencood_dataset = build_dataset(hypes, visualize=True, train=False)
+    print(f"{len(opencood_dataset)} samples found.")
+    data_loader = DataLoader(opencood_dataset,
+                             batch_size=1,
+                             num_workers=16,
+                             collate_fn=opencood_dataset.collate_batch_test,
+                             shuffle=False,
+                             pin_memory=False,
+                             drop_last=False)
 
     print('Creating Model')
     model = train_utils.create_model(hypes)
     # we assume gpu is necessary
+    if torch.cuda.is_available():
+        model.cuda()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     print('Loading Model from checkpoint')
     saved_path = opt.model_dir
-    resume_epoch, model = train_utils.load_saved_model(saved_path, model)
-    print(f"resume from {resume_epoch} epoch.")
-    opt.note += f"_epoch{resume_epoch}"
-    
-    if torch.cuda.is_available():
-        model.cuda()
+    _, model = train_utils.load_saved_model(saved_path, model)
     model.eval()
 
-    # setting noise
-    np.random.seed(303)
-    
-    # build dataset for each noise setting
-    print('Dataset Building')
-    opencood_dataset = build_dataset(hypes, visualize=True, train=False)
-    # opencood_dataset_subset = Subset(opencood_dataset, range(640,2100))
-    # data_loader = DataLoader(opencood_dataset_subset,
-    data_loader = DataLoader(opencood_dataset,
-                            batch_size=1,
-                            num_workers=4,
-                            collate_fn=opencood_dataset.collate_batch_test,
-                            shuffle=False,
-                            pin_memory=False,
-                            drop_last=False)
-    
-    modality_list = opencood_dataset.modality_name_list
-    # Create the dictionary for evaluation
-    if opt.all:
-        result_stat = {m: {0.3: {'tp': [], 'fp': [], 'gt': 0, 'score': []},                
-                0.5: {'tp': [], 'fp': [], 'gt': 0, 'score': []},                
-                0.7: {'tp': [], 'fp': [], 'gt': 0, 'score': []}} for m in modality_list}
-    else:
-        result_stat = {0.3: {'tp': [], 'fp': [], 'gt': 0, 'score': []},                
-                    0.5: {'tp': [], 'fp': [], 'gt': 0, 'score': []},                
-                    0.7: {'tp': [], 'fp': [], 'gt': 0, 'score': []}}
+    # Create the dictionary for evaluation.
+    # also store the confidence score for each prediction
+    result_stat = {0.3: {'tp': [], 'fp': [], 'gt': 0, 'score': []},                
+                   0.5: {'tp': [], 'fp': [], 'gt': 0, 'score': []},                
+                   0.7: {'tp': [], 'fp': [], 'gt': 0, 'score': []}}
 
-    
-    infer_info = opt.fusion_method + opt.note
+    if opt.show_sequence:
+        vis = o3d.visualization.Visualizer()
+        vis.create_window()
 
+        vis.get_render_option().background_color = [0.05, 0.05, 0.05]
+        vis.get_render_option().point_size = 1.0
+        vis.get_render_option().show_coordinate_frame = True
 
-    for i, batch_data in enumerate(data_loader):
-        print(f"{infer_info}_{i}")
-        if batch_data is None:
-            continue
+        # used to visualize lidar points
+        vis_pcd = o3d.geometry.PointCloud()
+        # used to visualize object bounding box, maximum 50
+        vis_aabbs_gt = []
+        vis_aabbs_pred = []
+        for _ in range(50):
+            vis_aabbs_gt.append(o3d.geometry.LineSet())
+            vis_aabbs_pred.append(o3d.geometry.LineSet())
+
+    for i, batch_data in tqdm(enumerate(data_loader)):
+        # print(i)
         with torch.no_grad():
             batch_data = train_utils.to_device(batch_data, device)
-
             if opt.fusion_method == 'late':
-                infer_result = inference_utils.inference_late_fusion(batch_data,
-                                                        model,
-                                                        opencood_dataset)
+                pred_box_tensor, pred_score, gt_box_tensor = \
+                    inference_utils.inference_late_fusion(batch_data,
+                                                          model,
+                                                          opencood_dataset)
             elif opt.fusion_method == 'early':
-                infer_result = inference_utils.inference_early_fusion(batch_data,
-                                                        model,
-                                                        opencood_dataset)
+                pred_box_tensor, pred_score, gt_box_tensor = \
+                    inference_utils.inference_early_fusion(batch_data,
+                                                           model,
+                                                           opencood_dataset)
             elif opt.fusion_method == 'intermediate':
-                infer_result = inference_utils.inference_intermediate_fusion(batch_data,
-                                                                model,
-                                                                opencood_dataset,
-                                                                infer_all=opt.all,
-                                                                show_bev=opt.show_bev)
-            elif opt.fusion_method == 'no':
-                infer_result = inference_utils.inference_no_fusion(batch_data,
-                                                                model,
-                                                                opencood_dataset)
-            elif opt.fusion_method == 'no_w_uncertainty':
-                infer_result = inference_utils.inference_no_fusion_w_uncertainty(batch_data,
-                                                                model,
-                                                                opencood_dataset)
-            elif opt.fusion_method == 'single':
-                infer_result = inference_utils.inference_no_fusion(batch_data,
-                                                                model,
-                                                                opencood_dataset,
-                                                                single_gt=True)
+                pred_box_tensor, pred_score, gt_box_tensor = \
+                    inference_utils.inference_intermediate_fusion(batch_data,
+                                                                  model,
+                                                                  opencood_dataset)
             else:
-                raise NotImplementedError('Only single, no, no_w_uncertainty, early, late and intermediate'
-                                        'fusion is supported.')
-            
-            agent_modality_list = batch_data['ego']['agent_modality_list']
-            if not opt.all:
-                infer_result = [infer_result]
-            for idx, infer_result_single in enumerate(infer_result):
-                if opt.all:
-                    work_dir = os.path.join(opt.model_dir, f'modality_{agent_modality_list[idx]}')
-                    os.makedirs(work_dir, exist_ok=True)
-                else:
-                    work_dir = opt.model_dir
-                    
-                pred_box_tensor = infer_result_single['pred_box_tensor']
-                gt_box_tensor = infer_result_single['gt_box_tensor']
-                pred_score = infer_result_single['pred_score']
-                
-                eval_utils.caluclate_tp_fp(pred_box_tensor,
-                                        pred_score,
-                                        gt_box_tensor,
-                                        result_stat[agent_modality_list[idx]] if opt.all else result_stat,
-                                        0.3)
-                eval_utils.caluclate_tp_fp(pred_box_tensor,
-                                        pred_score,
-                                        gt_box_tensor,
-                                        result_stat[agent_modality_list[idx]] if opt.all else result_stat,
-                                        0.5)
-                eval_utils.caluclate_tp_fp(pred_box_tensor,
-                                        pred_score,
-                                        gt_box_tensor,
-                                        result_stat[agent_modality_list[idx]] if opt.all else result_stat,
-                                        0.7)
-                if opt.save_npy:
-                    npy_save_path = os.path.join(work_dir, 'npy')
-                    if not os.path.exists(npy_save_path):
-                        os.makedirs(npy_save_path)
-                    inference_utils.save_prediction_gt(pred_box_tensor,
-                                                    gt_box_tensor,
-                                                    batch_data['ego'][
-                                                        'origin_lidar'][0],
-                                                    i,
-                                                    npy_save_path)
+                raise NotImplementedError('Only early, late and intermediate'
+                                          'fusion is supported.')
 
-                if not opt.no_score:
-                    infer_result_single.update({'score_tensor': pred_score})
+            eval_utils.caluclate_tp_fp(pred_box_tensor,
+                                       pred_score,
+                                       gt_box_tensor,
+                                       result_stat,
+                                       0.3)
+            eval_utils.caluclate_tp_fp(pred_box_tensor,
+                                       pred_score,
+                                       gt_box_tensor,
+                                       result_stat,
+                                       0.5)
+            eval_utils.caluclate_tp_fp(pred_box_tensor,
+                                       pred_score,
+                                       gt_box_tensor,
+                                       result_stat,
+                                       0.7)
+            if opt.save_npy:
+                npy_save_path = os.path.join(opt.model_dir, 'npy')
+                if not os.path.exists(npy_save_path):
+                    os.makedirs(npy_save_path)
+                inference_utils.save_prediction_gt(pred_box_tensor,
+                                                   gt_box_tensor,
+                                                   batch_data['ego'][
+                                                       'origin_lidar'][0],
+                                                   i,
+                                                   npy_save_path)
 
-                if getattr(opencood_dataset, "heterogeneous", False):
-                    cav_box_np, agent_modality_list = inference_utils.get_cav_box(batch_data)
-                    infer_result_single.update({"cav_box_np": cav_box_np, \
-                                        "agent_modality_list": agent_modality_list})
+            if opt.show_vis or opt.save_vis:
+                vis_save_path = ''
+                if opt.save_vis:
+                    vis_save_path = os.path.join(opt.model_dir, 'vis')
+                    if not os.path.exists(vis_save_path):
+                        os.makedirs(vis_save_path)
+                    vis_save_path = os.path.join(vis_save_path, '%05d.png' % i)
 
-                if (i % opt.save_vis_interval == 0) and (pred_box_tensor is not None or gt_box_tensor is not None):
-                    vis_save_path_root = os.path.join(work_dir, f'vis_{infer_info}')
-                    if not os.path.exists(vis_save_path_root):
-                        os.makedirs(vis_save_path_root)
+                opencood_dataset.visualize_result(pred_box_tensor,
+                                                  gt_box_tensor,
+                                                  batch_data['ego'][
+                                                      'origin_lidar'],
+                                                  opt.show_vis,
+                                                  vis_save_path,
+                                                  dataset=opencood_dataset)
 
-                    # vis_save_path = os.path.join(vis_save_path_root, '3d_%05d.png' % i)
-                    # simple_vis.visualize(infer_result_single,
-                    #                     batch_data['ego'][
-                    #                         'origin_lidar'][0],
-                    #                     hypes['postprocess']['gt_range'],
-                    #                     vis_save_path,
-                    #                     method='3d',
-                    #                     left_hand=left_hand)
-                    
-                    vis_save_path = os.path.join(vis_save_path_root, 'bev_%05d.png' % i)
-                    simple_vis.visualize(infer_result_single,
-                                        batch_data['ego'][
-                                            'origin_lidar'][0],
-                                        hypes['postprocess']['gt_range'],
-                                        vis_save_path,
-                                        method='bev',
-                                        left_hand=left_hand,
-                                        show_bev=opt.show_bev)
-        torch.cuda.empty_cache()
-    if opt.all:
-        for modality_name in modality_list:
-            work_dir = os.path.join(opt.model_dir, modality_name)
-            os.makedirs(work_dir, exist_ok=True)
-            _, ap50, ap70 = eval_utils.eval_final_results(result_stat[modality_name],
-                                        work_dir, infer_info)
-    else:
-        _, ap50, ap70 = eval_utils.eval_final_results(result_stat, opt.model_dir, infer_info)
+            if opt.show_sequence:
+                pcd, pred_o3d_box, gt_o3d_box = \
+                    vis_utils.visualize_inference_sample_dataloader(
+                        pred_box_tensor,
+                        gt_box_tensor,
+                        batch_data['ego']['origin_lidar'],
+                        vis_pcd,
+                        mode='constant'
+                        )
+                if i == 0:
+                    vis.add_geometry(pcd)
+                    vis_utils.linset_assign_list(vis,
+                                                 vis_aabbs_pred,
+                                                 pred_o3d_box,
+                                                 update_mode='add')
+
+                    vis_utils.linset_assign_list(vis,
+                                                 vis_aabbs_gt,
+                                                 gt_o3d_box,
+                                                 update_mode='add')
+
+                vis_utils.linset_assign_list(vis,
+                                             vis_aabbs_pred,
+                                             pred_o3d_box)
+                vis_utils.linset_assign_list(vis,
+                                             vis_aabbs_gt,
+                                             gt_o3d_box)
+                vis.update_geometry(pcd)
+                vis.poll_events()
+                vis.update_renderer()
+                time.sleep(0.001)
+
+    eval_utils.eval_final_results(result_stat,
+                                  opt.model_dir,
+                                  opt.global_sort_detections)
+    if opt.show_sequence:
+        vis.destroy_window()
+
 
 if __name__ == '__main__':
     main()

@@ -67,14 +67,14 @@ class CiassdPostprocessor(VoxelPostprocessor):
             prob = torch.sigmoid(prob.permute(0, 2, 3, 1).contiguous())
             reg = preds_dict['box_preds'].permute(0, 2, 3, 1).contiguous()
             iou = preds_dict['iou_preds'].permute(0, 2, 3, 1).contiguous().reshape(1, -1)
-            dir = preds_dict['dir_cls_preds'].permute(0, 2, 3, 1).contiguous().reshape(1, -1, 2) # [N, H*W*2, 2]
+            dir = preds_dict['dir_cls_preds'].permute(0, 2, 3, 1).contiguous().reshape(1, -1, 2)
 
             # convert regression map back to bounding box
             # (N, W*L*anchor_num, 7)
-            batch_box3d = self.delta_to_boxes3d(reg, anchor_box)
-            mask = torch.gt(prob, self.params['target_args']['score_threshold']) # [N, H, W, 2]
+            batch_box3d = self.delta_to_boxes3d(reg, anchor_box, False)
+            mask = torch.gt(prob, self.params['target_args']['score_threshold'])
             batch_num_box_count = [int(m.sum()) for m in mask]
-            mask = mask.view(1, -1) # [1,N*H*W*2]
+            mask = mask.view(1, -1)
             mask_reg = mask.unsqueeze(2).repeat(1, 1, 7)
 
             # during validation/testing, the batch size should be 1
@@ -84,8 +84,8 @@ class CiassdPostprocessor(VoxelPostprocessor):
             boxes3d = torch.masked_select(batch_box3d.view(-1, 7), mask_reg[0]).view(-1, 7)
             scores = torch.masked_select(prob.view(-1), mask[0])
 
-            dir_labels = torch.max(dir, dim=-1)[1]  # indices. shape [N, H*W*2].  value 0 or 1
-            dir_labels = dir_labels[mask] # sum(mask==1)
+            dir_labels = torch.max(dir, dim=-1)[1]
+            dir_labels = dir_labels[mask]
             # top_labels = torch.zeros([scores.shape[0]], dtype=torch.long).cuda()
             if scores.shape[0] != 0:
                 iou = (iou + 1) * 0.5
@@ -166,3 +166,4 @@ class CiassdPostprocessor(VoxelPostprocessor):
                 cur_idx += n
 
             return batch_pred_boxes3d, batch_scores
+

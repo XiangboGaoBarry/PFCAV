@@ -4,16 +4,6 @@ from torch import nn
 from einops import rearrange
 
 
-class PreNorm(nn.Module):
-    def __init__(self, dim, fn):
-        super().__init__()
-        self.norm = nn.LayerNorm(dim)
-        self.fn = fn
-
-    def forward(self, x, **kwargs):
-        return self.fn(self.norm(x), **kwargs)
-
-
 class PreNormResidual(nn.Module):
     def __init__(self, dim, fn):
         super().__init__()
@@ -22,6 +12,16 @@ class PreNormResidual(nn.Module):
 
     def forward(self, x, **kwargs):
         return self.fn(self.norm(x), **kwargs) + x
+
+
+class PreNorm(nn.Module):
+    def __init__(self, dim, fn):
+        super().__init__()
+        self.norm = nn.LayerNorm(dim)
+        self.fn = fn
+
+    def forward(self, x, **kwargs):
+        return self.fn(self.norm(x), **kwargs)
 
 
 class FeedForward(nn.Module):
@@ -131,4 +131,4 @@ class BaseTransformer(nn.Module):
         # B, H, W, C
         output = output[:, 0]
 
-        return 
+        return output

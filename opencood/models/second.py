@@ -15,6 +15,7 @@ class Second(nn.Module):
     def __init__(self, args):
         super(Second, self).__init__()
 
+        self.batch_size = args['batch_size']
         # mean_vfe
         self.mean_vfe = MeanVFE(args['mean_vfe'], 4)
         # sparse 3d backbone
@@ -36,12 +37,11 @@ class Second(nn.Module):
         voxel_features = data_dict['processed_lidar']['voxel_features']
         voxel_coords = data_dict['processed_lidar']['voxel_coords']
         voxel_num_points = data_dict['processed_lidar']['voxel_num_points']
-        batch_size = voxel_coords[:,0].max() + 1 # batch size is padded in the first idx
 
         batch_dict = {'voxel_features': voxel_features,
                       'voxel_coords': voxel_coords,
                       'voxel_num_points': voxel_num_points,
-                      'batch_size': batch_size}
+                      'batch_size': self.batch_size}
 
         batch_dict = self.mean_vfe(batch_dict)
         batch_dict = self.backbone_3d(batch_dict)

@@ -1,21 +1,19 @@
 import torch
 import torch.nn as nn
-import numpy as np
-from opencood.utils.common_utils import limit_period
+
 from opencood.data_utils.post_processor.voxel_postprocessor import VoxelPostprocessor
 from opencood.pcdet_utils.iou3d_nms.iou3d_nms_utils import aligned_boxes_iou3d_gpu
-from icecream import ic
+
 
 class CiassdLoss(nn.Module):
-    def __init__(self, args, keyname='stage1_out'):
+    def __init__(self, args):
         super(CiassdLoss, self).__init__()
         self.pos_cls_weight = args['pos_cls_weight']
         self.encode_rad_error_by_sin = args['encode_rad_error_by_sin']
         self.cls = args['cls']
         self.reg = args['reg']
+        self.iou = args['iou']
         self.dir = args['dir']
-        self.iou = None if 'iou' not in args else args['iou']
-        self.keyname = keyname
         self.loss_dict = {}
         ##
         self.num_cls = 2
@@ -28,17 +26,29 @@ class CiassdLoss(nn.Module):
         output_dict : dict
         target_dict : dict
         """
-        preds_dict = output_dict[self.keyname]
-
-        if 'stage1' in label_dict.keys():
-            target_dict = label_dict['stage1']
-        else: # for PointPillars
-            target_dict = label_dict
-
+        preds_dict = output_dict['preds_dict_stage1']
+        target_dict = label_dict['stage1']
         if 'record_len' in output_dict:
             batch_size = int(output_dict['record_len'].sum())
         else:
             batch_size = output_dict['batch_size']
+
+        # ########
+        # pred = torch.sigmoid(preds_dict['cls_preds'][0]).sum(dim=0).cpu().detach().numpy()
+        # tagt_pos = target_dict['pos_equal_one'][0].sum(dim=-1).cpu().detach().numpy()
+        # tagt_neg = target_dict['neg_equal_one'][0].sum(dim=-1).cpu().detach().numpy()
+        # import matplotlib.pyplot as plt
+        #
+        # fig = plt.figure(figsize=(18, 8))
+        # ax1 = fig.add_subplot(3, 1, 1)
+        # ax1.imshow(pred, cmap='cool')
+        # ax2 = fig.add_subplot(3, 1, 2)
+        # ax2.imshow(tagt_pos, cmap='cool')
+        # ax3 = fig.add_subplot(3, 1, 3)
+        # ax3.imshow(tagt_neg, cmap='cool')
+        # plt.show()
+        # plt.close()
+        # #########
 
         cls_labls = target_dict['pos_equal_one'].view(batch_size, -1,  self.num_cls - 1)
         positives = cls_labls > 0
@@ -58,57 +68,53 @@ class CiassdLoss(nn.Module):
 
         # reg loss
         reg_weights = positives / torch.clamp(pos_normalizer, min=1.0)
-        reg_preds = preds_dict['reg_preds'].permute(0, 2, 3, 1).contiguous().view(batch_size, -1, self.box_codesize)
+        reg_preds = preds_dict['box_preds'].permute(0, 2, 3, 1).contiguous().view(batch_size, -1, self.box_codesize)
         reg_targets = target_dict['targets'].view(batch_size, -1, self.box_codesize)
         if self.encode_rad_error_by_sin:
             reg_preds, reg_targets = add_sin_difference(reg_preds, reg_targets)
         reg_loss = weighted_smooth_l1_loss(reg_preds, reg_targets, weights=reg_weights, sigma=self.reg['sigma'])
         reg_loss_reduced = reg_loss.sum() * self.reg['weight'] / batch_size
 
-
         # dir loss
-        dir_targets = self.get_direction_target(target_dict['targets'].view(batch_size, -1, self.box_codesize))
-        dir_logits = preds_dict[f"dir_preds"].permute(0, 2, 3, 1).contiguous().view(batch_size, -1, 2) # [N, H*W*#anchor, 2]
-
-        dir_loss = softmax_cross_entropy_with_logits(dir_logits.view(-1, self.anchor_num), dir_targets.view(-1, self.anchor_num)) 
-        dir_loss = dir_loss.flatten() * reg_weights.flatten() # [N, H*W*anchor_num]
+        dir_targets = get_direction_target(reg_targets, output_dict['anchor_box'])
+        dir_logits = preds_dict["dir_cls_preds"].permute(0, 2, 3, 1).contiguous().view(batch_size, -1, 2)
+        dir_weights = (cls_labls > 0).type_as(dir_logits).view(batch_size, -1)
+        dir_weights /= torch.clamp(dir_weights.sum(-1, keepdim=True), min=1.0)  # [8, 70400], averaged in sample.
+        dir_loss = softmax_cross_entropy_with_logits(dir_logits.view(-1, self.num_cls), dir_targets.view(-1, self.num_cls))
+        dir_loss = dir_loss.view(dir_weights.shape) * dir_weights
         dir_loss_reduced = dir_loss.sum() * self.dir['weight'] / batch_size
 
-        loss = cls_loss_reduced + reg_loss_reduced + dir_loss_reduced
-
         # iou loss
-        if self.iou is not None:
-            iou_preds = preds_dict["iou_preds"].permute(0, 2, 3, 1).contiguous()
-            pos_pred_mask = reg_weights.squeeze(dim=-1) > 0 # (4, 70400)
-            iou_pos_preds = iou_preds.view(batch_size, -1)[pos_pred_mask]
-            boxes3d_pred = VoxelPostprocessor.delta_to_boxes3d(preds_dict['reg_preds'].permute(0, 2, 3, 1).contiguous().detach(),
-                                                            output_dict['anchor_box'])[pos_pred_mask]
-            boxes3d_tgt = VoxelPostprocessor.delta_to_boxes3d(target_dict['targets'],
-                                                            output_dict['anchor_box'])[pos_pred_mask]
+        iou_preds = preds_dict["iou_preds"].permute(0, 2, 3, 1).contiguous()
+        pos_pred_mask = reg_weights.squeeze(dim=-1) > 0 # (4, 70400)
+        iou_pos_preds = iou_preds.view(batch_size, -1)[pos_pred_mask]
+        boxes3d_pred = VoxelPostprocessor.delta_to_boxes3d(preds_dict['box_preds'].permute(0, 2, 3, 1).contiguous().detach(),
+                                                           output_dict['anchor_box'],
+                                                           False)[pos_pred_mask]
+        boxes3d_tgt = VoxelPostprocessor.delta_to_boxes3d(target_dict['targets'],
+                                                          output_dict['anchor_box'],
+                                                          False)[pos_pred_mask]
+        iou_weights = reg_weights[pos_pred_mask].view(-1)
+        iou_pos_targets = aligned_boxes_iou3d_gpu(boxes3d_pred.float()[:, [0, 1, 2, 5, 4, 3, 6]],
+                                                  boxes3d_tgt.float()[:, [0, 1, 2, 5, 4, 3, 6]]).detach().squeeze()
+        iou_pos_targets = 2 * iou_pos_targets.view(-1) - 1
+        iou_loss = weighted_smooth_l1_loss(iou_pos_preds, iou_pos_targets, weights=iou_weights, sigma=self.iou['sigma'])
 
-            iou_weights = reg_weights[pos_pred_mask].view(-1)
-            iou_pos_targets = aligned_boxes_iou3d_gpu(boxes3d_pred.float()[:, [0, 1, 2, 5, 4, 3, 6]],
-                                                    boxes3d_tgt.float()[:, [0, 1, 2, 5, 4, 3, 6]]).detach().squeeze()
-            iou_pos_targets = 2 * iou_pos_targets.view(-1) - 1
-            iou_loss = weighted_smooth_l1_loss(iou_pos_preds, iou_pos_targets, weights=iou_weights, sigma=self.iou['sigma'])
-            iou_loss_reduced = iou_loss.sum() * self.iou['weight'] / batch_size
+        iou_loss_reduced = iou_loss.sum() * self.iou['weight'] / batch_size
 
-            loss += iou_loss_reduced
-            self.loss_dict.update({
-                'iou_loss': iou_loss_reduced
-            })
-        
-        
+        loss = cls_loss_reduced + reg_loss_reduced + dir_loss_reduced + iou_loss_reduced
+
         self.loss_dict.update({
             'total_loss': loss,
             'cls_loss': cls_loss_reduced,
             'reg_loss': reg_loss_reduced,
             'dir_loss': dir_loss_reduced,
+            'iou_loss': iou_loss_reduced
         })
 
         return loss
 
-    def logging(self, epoch, batch_id, batch_len, writer = None):
+    def logging(self, epoch, batch_id, batch_len, writer, pbar=None):
         """
         Print out  the loss function for current iteration.
 
@@ -127,54 +133,21 @@ class CiassdLoss(nn.Module):
         reg_loss = self.loss_dict['reg_loss']
         cls_loss = self.loss_dict['cls_loss']
         dir_loss = self.loss_dict['dir_loss']
-        if 'iou_loss' in self.loss_dict:
-            iou_loss = self.loss_dict['iou_loss']
+        iou_loss = self.loss_dict['iou_loss']
         if (batch_id + 1) % 10 == 0:
             print("[epoch %d][%d/%d], || Loss: %.4f || Cls: %.4f"
                   " || Loc: %.4f || Dir: %.4f || Iou: %.4f" % (
                       epoch, batch_id + 1, batch_len,
                       total_loss.item(), cls_loss.item(), reg_loss.item(), dir_loss.item(), iou_loss.item()))
-        if writer is not None:
-            writer.add_scalar('Regression_loss', reg_loss.item(),
-                            epoch*batch_len + batch_id)
-            writer.add_scalar('Confidence_loss', cls_loss.item(),
-                            epoch*batch_len + batch_id)
-            writer.add_scalar('Direction_loss', dir_loss.item(),
-                            epoch*batch_len + batch_id)
-            if 'iou_loss' in self.loss_dict:
-                writer.add_scalar('Iou_loss', iou_loss.item(),
-                                epoch*batch_len + batch_id)
 
-
-    def get_direction_target(self, reg_targets):
-        """
-        Args:
-            reg_targets:  [N, H * W * #anchor_num, 7]
-                The last term is (theta_gt - theta_a)
-        
-        Returns:
-            dir_targets:
-                theta_gt: [N, H * W * #anchor_num, NUM_BIN] 
-                NUM_BIN = 2
-        """
-        num_bins = self.dir['args']['num_bins']
-        dir_offset = self.dir['args']['dir_offset']
-        anchor_yaw = np.deg2rad(np.array(self.dir['args']['anchor_yaw']))  # for direction classification
-        self.anchor_yaw_map = torch.from_numpy(anchor_yaw).view(1,-1,1)  # [1,2,1]
-        self.anchor_num = self.anchor_yaw_map.shape[1]
-
-        H_times_W_times_anchor_num = reg_targets.shape[1]
-        anchor_map = self.anchor_yaw_map.repeat(1, H_times_W_times_anchor_num//self.anchor_num, 1).to(reg_targets.device) # [1, H * W * #anchor_num, 1]
-
-        rot_gt = reg_targets[..., -1] + anchor_map[..., -1] # [N, H*W*anchornum]
-        offset_rot = limit_period(rot_gt - dir_offset, 0, 2 * np.pi)
-        dir_cls_targets = torch.floor(offset_rot / (2 * np.pi / num_bins)).long()  # [N, H*W*anchornum]
-        dir_cls_targets = torch.clamp(dir_cls_targets, min=0, max=num_bins - 1)
-        # one_hot:
-        # if rot_gt > 0, then the label is 1, then the regression target is [0, 1]
-        dir_cls_targets = one_hot_f(dir_cls_targets, num_bins)
-        return dir_cls_targets
-
+        writer.add_scalar('Regression_loss', reg_loss.item(),
+                          epoch*batch_len + batch_id)
+        writer.add_scalar('Confidence_loss', cls_loss.item(),
+                          epoch*batch_len + batch_id)
+        writer.add_scalar('Direction_loss', dir_loss.item(),
+                          epoch*batch_len + batch_id)
+        writer.add_scalar('Iou_loss', iou_loss.item(),
+                          epoch*batch_len + batch_id)
 
 
 def add_sin_difference(boxes1, boxes2):

@@ -16,7 +16,9 @@ def bilinear_interpolate_torch(im, x, y):
         im: (H, W, C) [y, x]
         x: (N)
         y: (N)
+
     Returns:
+
     """
     x0 = torch.floor(x).long()
     x1 = x0 + 1
@@ -121,8 +123,8 @@ class VoxelSetAbstraction(nn.Module):
     def get_sampled_points(self, batch_dict):
         batch_size = batch_dict['batch_size']
         if self.model_cfg['point_source'] == 'raw_points':
-            src_points = batch_dict['origin_lidar_for_vsa'][:, 1:]
-            batch_indices = batch_dict['origin_lidar_for_vsa'][:, 0].long()
+            src_points = batch_dict['origin_lidar'][:, 1:]
+            batch_indices = batch_dict['origin_lidar'][:, 0].long()
         elif self.model_cfg['point_source'] == 'voxel_centers':
             src_points = common_utils.get_voxel_centers(
                 batch_dict['voxel_coords'][:, 1:4],
@@ -175,9 +177,11 @@ class VoxelSetAbstraction(nn.Module):
                 points: optional (N, 1 + 3 + C) [bs_idx, x, y, z, ...]
                 spatial_features: optional
                 spatial_features_stride: optional
+
         Returns:
             point_features: (N, C)
             point_coords: (N, 4)
+
         """
         keypoints = self.get_sampled_points(batch_dict) # BxNx4
         kpt_mask1 = torch.logical_and(keypoints[..., 2] > -2.8, keypoints[..., 2] < 1.0)
@@ -189,7 +193,6 @@ class VoxelSetAbstraction(nn.Module):
             boxes = torch.zeros((len(dets_list), max_len, 7), dtype=dets_list[0].dtype,
                                 device=dets_list[0].device)
             for i, dets in enumerate(dets_list):
-                dets = dets[:, [0,1,2,5,4,3,6]] # hwl -> lwh
                 if len(dets)==0:
                     continue
                 cur_dets = dets.clone()
@@ -205,7 +208,6 @@ class VoxelSetAbstraction(nn.Module):
         if (kpt_mask).sum() < 2:
             kpt_mask[0, torch.randint(0, 1024, (2,))] = True
 
-
         point_features_list = []
         if 'bev' in self.model_cfg['features_source']:
             point_bev_features = self.interpolate_from_bev_features(
@@ -220,7 +222,7 @@ class VoxelSetAbstraction(nn.Module):
         new_xyz_batch_cnt = torch.tensor([(mask).sum() for mask in kpt_mask], device=new_xyz.device).int()
 
         if 'raw_points' in self.model_cfg['features_source']:
-            raw_points = batch_dict['origin_lidar_for_vsa']
+            raw_points = batch_dict['origin_lidar']
             xyz = raw_points[:, 1:4]
             xyz_batch_cnt = xyz.new_zeros(batch_size).int()
             indices = raw_points[:, 0].long()
@@ -260,8 +262,9 @@ class VoxelSetAbstraction(nn.Module):
             point_features_list.append(pooled_features)
 
         point_features = torch.cat(point_features_list, dim=1)
-        batch_dict['point_features_before_fusion'] = point_features.view(-1, point_features.shape[-1])  # torch.Size([373, 640])
-        point_features = self.vsa_point_feature_fusion(point_features.view(-1, point_features.shape[-1]))  # (0): Linear(in_features=512, out_features=32, bias=False)
+
+        batch_dict['point_features_before_fusion'] = point_features.view(-1, point_features.shape[-1])
+        point_features = self.vsa_point_feature_fusion(point_features.view(-1, point_features.shape[-1]))
 
         cur_idx = 0
         batch_dict['point_features'] = []

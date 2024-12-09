@@ -8,8 +8,7 @@ class SSFA(nn.Module):
         super(SSFA, self).__init__()
         self._num_input_features = args['feature_num']  # 128
 
-        seq = [nn.ZeroPad2d(1)]
-        seq += get_conv_layers('Conv2d', 128, 128, n_layers=3, kernel_size=[3, 3, 3],
+        seq = [nn.ZeroPad2d(1)] + get_conv_layers('Conv2d', 128, 128, n_layers=3, kernel_size=[3, 3, 3],
                                                   stride=[1, 1, 1], padding=[0, 1, 1], sequential=False)
         self.bottom_up_block_0 = nn.Sequential(*seq)
         self.bottom_up_block_1 = get_conv_layers('Conv2d', 128, 256, n_layers=3, kernel_size=[3, 3, 3],
@@ -89,12 +88,12 @@ class Head(nn.Module):
     def forward(self, x):
         box_preds = self.conv_box(x)
         cls_preds = self.conv_cls(x)
-        ret_dict = {"reg_preds": box_preds, "cls_preds": cls_preds}
+        ret_dict = {"box_preds": box_preds, "cls_preds": cls_preds}
         if self.use_dir:
             dir_preds = self.conv_dir(x)  # dir_preds.shape=[8, w, h, 4]
-            ret_dict["dir_preds"] = dir_preds
+            ret_dict["dir_cls_preds"] = dir_preds
         else:
-            ret_dict["dir_preds"] = torch.zeros((len(box_preds), 1, 2))
+            ret_dict["dir_cls_preds"] = torch.zeros((len(box_preds), 1, 2))
 
         ret_dict["iou_preds"] = self.conv_iou(x)
 

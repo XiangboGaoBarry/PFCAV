@@ -87,7 +87,7 @@ class BevPostprocessor(BasePostprocessor):
         ----------
         label_map : numpy.array
             Targets array for classification and regression tasks with
-            the shape of label_shape. (H, W, 7). 
+            the shape of label_shape.
 
         bev_corners : numpy.array
             The bbx corners in lidar frame with shape (n, 4, 2)
@@ -104,17 +104,15 @@ class BevPostprocessor(BasePostprocessor):
                                self.geometry_param["W1"]]).reshape(1, -1)
 
         # discretized bbx corner representations -- (n, 4, 2)
-        # bev_corners is real coordinate
-        # bev_corners_dist is pixel coordinate
         bev_corners_dist = (bev_corners - bev_origin) / res / downsample_rate
         # generate the coordinates of m
-        x = np.arange(self.geometry_param["label_shape"][0]) # H (x in lidar coordinate)
-        y = np.arange(self.geometry_param["label_shape"][1]) # W (y in lidar coordinate)
+        x = np.arange(self.geometry_param["label_shape"][0])
+        y = np.arange(self.geometry_param["label_shape"][1])
         xx, yy = np.meshgrid(x, y)
 
         # (label_shape[0]*label_shape[1], 2)
         points = np.concatenate([xx.reshape(-1, 1), yy.reshape(-1, 1)],
-                                axis=-1) # pixel 
+                                axis=-1)
         bev_origin_dist = bev_origin / res / downsample_rate
 
         # loop over each bbx, find the points within the bbx.
@@ -252,16 +250,10 @@ class BevPostprocessor(BasePostprocessor):
             transformation_matrix = cav_content['transformation_matrix']
 
             # classification probability -- (label_shape[0], label_shape[1])
-            try:
-                prob = output_dict[cav_id]['cls'].squeeze(0).squeeze(0)
-            except:
-                prob = output_dict[cav_id]['cls_preds'].squeeze(0).squeeze(0)
+            prob = output_dict[cav_id]['cls'].squeeze(0).squeeze(0)
             prob = torch.sigmoid(prob)
             # regression map -- (label_shape[0], label_shape[1], 6)
-            try:
-                reg_map = output_dict[cav_id]['reg'].squeeze(0).permute(1, 2, 0)
-            except:
-                reg_map = output_dict[cav_id]['reg_preds'].squeeze(0).permute(1, 2, 0)
+            reg_map = output_dict[cav_id]['reg'].squeeze(0).permute(1, 2, 0)
             reg_map = self.denormalize_reg_map(reg_map)
             threshold = self.params['target_args']['score_threshold']
             mask = torch.gt(prob, threshold)
@@ -297,7 +289,7 @@ class BevPostprocessor(BasePostprocessor):
             pred_scores = pred_scores[keep_index]
 
         # filter out the prediction out of the range.
-        mask = box_utils.get_mask_for_boxes_within_range_torch(pred_box2ds, self.params['gt_range'])
+        mask = box_utils.get_mask_for_boxes_within_range_torch(pred_box2ds)
         pred_box2ds = pred_box2ds[mask, :, :]
         pred_scores = pred_scores[mask]
         assert pred_scores.shape[0] == pred_box2ds.shape[0]
@@ -418,7 +410,7 @@ class BevPostprocessor(BasePostprocessor):
         pred_box2ds = pred_box2ds[keep_index]
 
         # filter out the prediction out of the range.
-        mask = box_utils.get_mask_for_boxes_within_range_torch(pred_box2ds, self.params['gt_range'])
+        mask = box_utils.get_mask_for_boxes_within_range_torch(pred_box2ds)
         pred_box2ds = pred_box2ds[mask, :, :]
         return pred_box2ds
 

@@ -1,14 +1,12 @@
-# -*- coding: utf-8 -*-
-# Author: Yifan Lu <yifan_lu@sjtu.edu.cn>
-# License: TDG-Attribution-NonCommercial-NoDistrib
-
+"""
+torch_transformation_utils.py
+"""
 import os
 
 import torch
 import torch.nn.functional as F
 import numpy as np
 import matplotlib.pyplot as plt
-from icecream import ic
 
 def get_roi_and_cav_mask(shape, cav_mask, spatial_correction_matrix,
                          discrete_ratio, downsample_rate):
@@ -119,17 +117,14 @@ def get_discretized_transformation_matrix(matrix, discrete_ratio,
         number.
     discrete_ratio : float
         Discrete ratio.
-    downsample_rate : float or int
+    downsample_rate : float/int
         downsample_rate
-
-    discrete_ratio * downsample_rate = ___ meter one pixel, in the current feature map.
 
     Returns
     -------
     matrix : torch.Tensor
         Output transformation matrix in 2D with shape (B, L, 2, 3),
-        including 2D transformation and 2D rotation. 
-        transformation is pixel level
+        including 2D transformation and 2D rotation.
 
     """
     matrix = matrix[:, :, [0, 1], :][:, :, :, [0, 1, 3]]
@@ -320,17 +315,6 @@ def convert_affinematrix_to_homography(A):
     return H
 
 
-def warp_affine_simple(src, M, dsize,
-        mode='bilinear',
-        padding_mode='zeros',
-        align_corners=False):
-
-    B, C, H, W = src.size()
-    grid = F.affine_grid(M,
-                         [B, C, dsize[0], dsize[1]],
-                         align_corners=align_corners).to(src)
-    return F.grid_sample(src, grid, align_corners=align_corners)
-
 def warp_affine(
         src, M, dsize,
         mode='bilinear',
@@ -364,7 +348,6 @@ def warp_affine(
 
     # src_norm_trans_dst_norm = torch.inverse(dst_norm_trans_src_norm)
     src_norm_trans_dst_norm = _torch_inverse_cast(dst_norm_trans_src_norm)
-    
     grid = F.affine_grid(src_norm_trans_dst_norm[:, :2, :],
                          [B, C, dsize[0], dsize[1]],
                          align_corners=align_corners)
@@ -436,7 +419,6 @@ class Test:
                                     correction_matrix, 0.4, 4)
         plt.matshow(mask[0, :, :, 0, 0])
         plt.show()
-
 
 
 if __name__ == "__main__":

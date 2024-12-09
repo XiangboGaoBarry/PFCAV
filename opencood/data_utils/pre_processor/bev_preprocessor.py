@@ -34,7 +34,7 @@ class BevPreprocessor(BasePreprocessor):
         """
         bev = np.zeros(self.geometry_param['input_shape'], dtype=np.float32)
         intensity_map_count = np.zeros((bev.shape[0], bev.shape[1]),
-                                       dtype=int)
+                                       dtype=np.int)
         bev_origin = np.array(
             [self.geometry_param["L1"], self.geometry_param["W1"],
              self.geometry_param["H1"]]).reshape(1, -1)
@@ -42,21 +42,16 @@ class BevPreprocessor(BasePreprocessor):
         indices = ((pcd_raw[:, :3] - bev_origin) / self.geometry_param[
             "res"]).astype(int)
 
-        # if any point hit this voxel, set the voxel to 1
         for i in range(indices.shape[0]):
-            if indices[i, 0] >= 0 and indices[i, 0] < bev.shape[0] and \
-                    indices[i, 1] >= 0 and indices[i, 1] < bev.shape[1] and \
-                    indices[i, 2] >= 0 and indices[i, 2] < bev.shape[2]:  
-                bev[indices[i, 0], indices[i, 1], indices[i, 2]] = 1
-                bev[indices[i, 0], indices[i, 1], -1] += pcd_raw[i, 3] # intensity
-                intensity_map_count[indices[i, 0], indices[i, 1]] += 1
-                
+            bev[indices[i, 0], indices[i, 1], indices[i, 2]] = 1
+            bev[indices[i, 0], indices[i, 1], -1] += pcd_raw[i, 3]
+            intensity_map_count[indices[i, 0], indices[i, 1]] += 1
         divide_mask = intensity_map_count != 0
         bev[divide_mask, -1] = np.divide(bev[divide_mask, -1],
                                          intensity_map_count[divide_mask])
 
         data_dict = {
-            "bev_input": np.transpose(bev, (2, 0, 1)) # (C,H,W)
+            "bev_input": np.transpose(bev, (2, 0, 1))
         }
         return data_dict
 

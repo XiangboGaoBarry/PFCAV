@@ -23,10 +23,8 @@ class BackBoneIntermediate(BackBone):
         self.fusion_net5 = AttFusion(384)
 
     def forward(self, x, record_len):
-        # Here c3, c4, c5 includes all cav
         c3, c4, c5 = self.encode(x)
 
-        # Here c3, c4, c5 only include ego 
         c5 = self.fusion_net5(c5, record_len)
         c4 = self.fusion_net4(c4, record_len)
         c3 = self.fusion_net3(c3, record_len)

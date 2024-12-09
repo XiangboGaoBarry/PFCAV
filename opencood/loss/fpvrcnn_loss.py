@@ -2,7 +2,7 @@ import torch
 from torch import nn
 import numpy as np
 from opencood.loss.ciassd_loss import CiassdLoss, weighted_smooth_l1_loss
-from icecream import ic 
+
 
 class FpvrcnnLoss(nn.Module):
     def __init__(self, args):
@@ -23,16 +23,16 @@ class FpvrcnnLoss(nn.Module):
         ciassd_loss = self.ciassd_loss(output_dict, label_dict)
 
         # only update ciassd if no bbox is detected in the first stage
-        if 'stage2_out' not in output_dict:
+        if 'fpvrcnn_out' not in output_dict:
             self.loss_dict = {
                 'loss': ciassd_loss,
             }
             return ciassd_loss
 
         # rcnn out
-        rcnn_cls = output_dict['stage2_out']['rcnn_cls'].view(1, -1, 1)
-        rcnn_iou = output_dict['stage2_out']['rcnn_iou'].view(1, -1, 1)
-        rcnn_reg = output_dict['stage2_out']['rcnn_reg'].view(1, -1, 7)
+        rcnn_cls = output_dict['fpvrcnn_out']['rcnn_cls'].view(1, -1, 1)
+        rcnn_iou = output_dict['fpvrcnn_out']['rcnn_iou'].view(1, -1, 1)
+        rcnn_reg = output_dict['fpvrcnn_out']['rcnn_reg'].view(1, -1, 7)
 
         tgt_cls = output_dict['rcnn_label_dict']['cls_tgt'].view(1, -1, 1)
         tgt_iou = output_dict['rcnn_label_dict']['iou_tgt'].view(1, -1, 1)
@@ -42,27 +42,25 @@ class FpvrcnnLoss(nn.Module):
         # cls loss
         loss_cls = weighted_sigmoid_binary_cross_entropy(rcnn_cls, tgt_cls)
 
-        
         # iou loss
         # TODO: also count the negative samples
-        tgt_iou = 2 * (tgt_iou - 0.5) # normalize to -1, 1
         loss_iou = weighted_smooth_l1_loss(rcnn_iou, tgt_iou,
                                            weights=tgt_cls).mean()
 
         # regression loss
-        # [deprecated by Yifan Lu] Target resampling : Generate a weights mask to force the regressor concentrate on low iou predictions
+        # Target resampling : Generate a weights mask to force the regressor concentrate on low iou predictions
         # sample 50% with iou>0.7 and 50% < 0.7
         weights = torch.ones(tgt_iou.shape, device=tgt_iou.device)
         weights[tgt_cls == 0] = 0
-        # neg = torch.logical_and(tgt_iou < 0.7, tgt_cls != 0)
-        # pos = torch.logical_and(tgt_iou >= 0.7, tgt_cls != 0)
-        # num_neg = int(neg.sum(dim=1))
-        # num_pos = int(pos.sum(dim=1))
-        # num_pos_smps = max(num_neg, 2)
-        # pos_indices = torch.where(pos)[1]
-        # not_selsected = torch.randperm(num_pos)[:num_pos - num_pos_smps]
-        # # not_selsected_indices = pos_indices[not_selsected]
-        # weights[:, pos_indices[not_selsected]] = 0
+        neg = torch.logical_and(tgt_iou < 0.7, tgt_cls != 0)
+        pos = torch.logical_and(tgt_iou >= 0.7, tgt_cls != 0)
+        num_neg = int(neg.sum(dim=1))
+        num_pos = int(pos.sum(dim=1))
+        num_pos_smps = max(num_neg, 2)
+        pos_indices = torch.where(pos)[1]
+        not_selsected = torch.randperm(num_pos)[:num_pos - num_pos_smps]
+        # not_selsected_indices = pos_indices[not_selsected]
+        weights[:, pos_indices[not_selsected]] = 0
         loss_reg = weighted_smooth_l1_loss(rcnn_reg, tgt_reg,
                                            weights=weights / max(weights.sum(),
                                                                  1)).sum()
@@ -87,9 +85,10 @@ class FpvrcnnLoss(nn.Module):
 
         return loss
 
-    def logging(self, epoch, batch_id, batch_len, writer=None):
+    def logging(self, epoch, batch_id, batch_len, writer, pbar=None):
         """
         Print out  the loss function for current iteration.
+
         Parameters
         ----------
         epoch : int
@@ -123,32 +122,31 @@ class FpvrcnnLoss(nn.Module):
                         self.loss_dict['iou_loss'].item(),
                     )
             print(str_to_print)
-            
-        if writer:
-            writer.add_scalar('Ciassd_regression_loss', reg_loss.item(),
-                            epoch * batch_len + batch_id)
-            writer.add_scalar('Ciassd_Confidence_loss', cls_loss.item(),
-                            epoch * batch_len + batch_id)
-            writer.add_scalar('Ciassd_Direction_loss', dir_loss.item(),
-                            epoch * batch_len + batch_id)
-            writer.add_scalar('Ciassd_Iou_loss', iou_loss.item(),
-                            epoch * batch_len + batch_id)
-            writer.add_scalar('Ciassd_loss', ciassd_total_loss.item(),
-                            epoch * batch_len + batch_id)
-            if 'rcnn_loss' in self.loss_dict:
-                writer.add_scalar('Rcnn_regression_loss',
-                                self.loss_dict['reg_loss'].item(),
-                                epoch * batch_len + batch_id)
-                writer.add_scalar('Rcnn_Confidence_loss',
-                                self.loss_dict['cls_loss'].item(),
-                                epoch * batch_len + batch_id)
-                writer.add_scalar('Rcnn_Iou_loss',
-                                self.loss_dict['iou_loss'].item(),
-                                epoch * batch_len + batch_id)
-                writer.add_scalar('Rcnn_loss', self.loss_dict['rcnn_loss'].item(),
-                                epoch * batch_len + batch_id)
-                writer.add_scalar('Total_loss', self.loss_dict['loss'].item(),
-                                epoch * batch_len + batch_id)
+
+        writer.add_scalar('Ciassd_regression_loss', reg_loss.item(),
+                          epoch * batch_len + batch_id)
+        writer.add_scalar('Ciassd_Confidence_loss', cls_loss.item(),
+                          epoch * batch_len + batch_id)
+        writer.add_scalar('Ciassd_Direction_loss', dir_loss.item(),
+                          epoch * batch_len + batch_id)
+        writer.add_scalar('Ciassd_Iou_loss', iou_loss.item(),
+                          epoch * batch_len + batch_id)
+        writer.add_scalar('Ciassd_loss', ciassd_total_loss.item(),
+                          epoch * batch_len + batch_id)
+        if 'rcnn_loss' in self.loss_dict:
+            writer.add_scalar('Rcnn_regression_loss',
+                              self.loss_dict['reg_loss'].item(),
+                              epoch * batch_len + batch_id)
+            writer.add_scalar('Rcnn_Confidence_loss',
+                              self.loss_dict['cls_loss'].item(),
+                              epoch * batch_len + batch_id)
+            writer.add_scalar('Rcnn_Iou_loss',
+                              self.loss_dict['iou_loss'].item(),
+                              epoch * batch_len + batch_id)
+            writer.add_scalar('Rcnn_loss', self.loss_dict['rcnn_loss'].item(),
+                              epoch * batch_len + batch_id)
+            writer.add_scalar('Total_loss', self.loss_dict['loss'].item(),
+                              epoch * batch_len + batch_id)
 
 
 def weighted_sigmoid_binary_cross_entropy(preds, tgts, weights=None,
@@ -171,10 +169,12 @@ def indices_to_dense_vector(
         indices, size, indices_value=1.0, default_value=0, dtype=np.float32
 ):
     """Creates dense vector with indices set to specific value and rest to zeros.
+
     This function exists because it is unclear if it is safe to use
         tf.sparse_to_dense(indices, [size], 1, validate_indices=False)
     with indices which are not ordered.
     This function accepts a dynamic size (e.g. tf.shape(tensor)[0])
+
     Args:
         indices: 1d Tensor with integer indices which are to be set to
             indices_values.
@@ -182,6 +182,7 @@ def indices_to_dense_vector(
         indices_value: values of elements specified by indices in the output vector
         default_value: values of other elements in the output vector.
         dtype: data type.
+
     Returns:
         dense 1D Tensor of shape [size] with indices set to indices_values and the
             rest set to default_value.

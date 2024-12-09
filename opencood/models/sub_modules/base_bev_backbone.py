@@ -31,7 +31,6 @@ class BaseBEVBackbone(nn.Module):
             upsample_strides = num_upsample_filters = []
 
         num_levels = len(layer_nums)
-        self.num_levels = num_levels
         c_in_list = [input_channels, *num_filters[:-1]]
 
         self.blocks = nn.ModuleList()
@@ -119,39 +118,5 @@ class BaseBEVBackbone(nn.Module):
         if len(self.deblocks) > len(self.blocks):
             x = self.deblocks[-1](x)
 
-        data_dict['spatial_features_2d'] = x # [N,C,100,352]
-
+        data_dict['spatial_features_2d'] = x
         return data_dict
-
-
-    def get_multiscale_feature(self, spatial_features):
-        """
-        before multiscale intermediate fusion
-        """
-        feature_list = []
-        x = spatial_features
-        for i in range(len(self.blocks)):
-            x = self.blocks[i](x)
-            feature_list.append(x)
-
-        return feature_list
-
-    def decode_multiscale_feature(self, x):
-        """
-        after multiscale interemediate fusion
-        """
-        ups = []
-        for i in range(self.num_levels):
-            if len(self.deblocks) > 0:
-                ups.append(self.deblocks[i](x[i]))
-            else:
-                ups.append(x[i])
-        if len(ups) > 1:
-            x = torch.cat(ups, dim=1)
-        elif len(ups) == 1:
-            x = ups[0]
-
-        if len(self.deblocks) > self.num_levels:
-            x = self.deblocks[-1](x)
-        return x
-        

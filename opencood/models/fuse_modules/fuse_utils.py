@@ -13,6 +13,7 @@ from opencood.utils.common_utils import torch_tensor_to_numpy
 def regroup(dense_feature, record_len, max_len):
     """
     Regroup the data based on the record_len.
+
     Parameters
     ----------
     dense_feature : torch.Tensor
@@ -21,6 +22,7 @@ def regroup(dense_feature, record_len, max_len):
         [sample1_len, sample2_len, ...]
     max_len : int
         Maximum cav number
+
     Returns
     -------
     regroup_feature : torch.Tensor
